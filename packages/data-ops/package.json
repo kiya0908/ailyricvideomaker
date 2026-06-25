@@ -1,0 +1,57 @@
+{
+  "name": "@repo/data-ops",
+  "version": "1.0.0",
+  "description": "Manage auth, database, schemas, and queries",
+  "exports": {
+    "./auth/*": {
+      "default": "./dist/auth/*.js",
+      "types": "./dist/auth/*.d.ts"
+    },
+    "./database/*": {
+      "default": "./dist/database/*.js",
+      "types": "./dist/database/*.d.ts"
+    },
+    "./drizzle/*": {
+      "default": "./dist/drizzle/*.js",
+      "types": "./dist/drizzle/*.d.ts"
+    },
+    "./zod-schema/*": {
+      "default": "./dist/zod-schema/*.js",
+      "types": "./dist/zod-schema/*.d.ts"
+    },
+    "./queries/*": {
+      "default": "./dist/queries/*.js",
+      "types": "./dist/queries/*.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --outDir ./dist && tsc-alias",
+    "better-auth:generate": "mkdir -p src/drizzle && npx @better-auth/cli@latest generate --config ./config/auth.ts --output ./src/drizzle/auth-schema.ts",
+    "drizzle:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "drizzle:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "drizzle:pull": "drizzle-kit pull --config drizzle.config.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "@planetscale/database": "^1.19.0",
+    "@polar-sh/better-auth": "^1.6.3",
+    "@polar-sh/sdk": "^0.42.1",
+    "better-auth": "^1.4.9",
+    "better-sqlite3": "^12.5.0",
+    "drizzle-orm": "^0.45.1",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251228.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "dotenv": "^17.2.3",
+    "drizzle-kit": "^0.31.8",
+    "mysql2": "^3.16.0",
+    "postgres": "^3.4.7",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "data-service",
+  "description": "数据服务包：提供独立的 Cloudflare Worker 后端服务，复用 data-ops 的数据访问能力。",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --remote",
+    "start": "wrangler dev",
+    "test": "vitest",
+    "cf-typegen": "wrangler types --env-interface BaseEnv"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.11.1",
+    "@types/node": "^24.10.4",
+    "typescript": "^5.9.3",
+    "vitest": "~3.2.4",
+    "wrangler": "^4.56.0"
+  },
+  "dependencies": {
+    "@repo/data-ops": "workspace:*",
+    "hono": "^4.11.3",
+    "zod": "^4.2.1"
+  }
+}

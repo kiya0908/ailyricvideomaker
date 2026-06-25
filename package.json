@@ -1,0 +1,33 @@
+{
+  "name": "saas-kit",
+  "description": "仓库根包：用于编排 Bun workspace、共享构建脚本以及两个 Cloudflare Worker 应用的启动和部署。",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "setup": "bun install && bun run build:data-ops",
+    "build:data-ops": "bun run --filter ./packages/data-ops build",
+    "dev:user-application": "bun run --filter user-application dev",
+    "deploy:user-application": "bun run build:data-ops && bun run --filter user-application deploy",
+    "dev:data-service": "bun run --filter data-service dev",
+    "deploy:data-service": "bun run build:data-ops && bun run --filter data-service deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "bun@1.3.5",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "trustedDependencies": [
+    "@tailwindcss/oxide",
+    "better-sqlite3",
+    "esbuild",
+    "sharp",
+    "workerd"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.10.4",
+    "typescript": "^5.9.3"
+  }
+}

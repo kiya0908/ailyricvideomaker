@@ -1,0 +1,14 @@
+{
+  "extends": "@workspace/typescript-config/vite-react-library.json",
+  "include": ["**/*.ts", "**/*.tsx"],
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["vite/client", "./worker-configuration.d.ts", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@workspace/ui/*": ["../../packages/ui/src/*"]
+    }
+  }
+}

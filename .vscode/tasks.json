@@ -1,0 +1,88 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "bdIssueId",
+      "type": "promptString",
+      "description": "Beads issue id (e.g., bd-a1b2 or api-a1b2)",
+      "default": ""
+    },
+    {
+      "id": "bdNotes",
+      "type": "promptString",
+      "description": "Notes to append",
+      "default": ""
+    },
+    {
+      "id": "bdCloseReason",
+      "type": "promptString",
+      "description": "Close reason (short summary of what changed + how verified)",
+      "default": "Completed"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Beads: Ready",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd ready",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Status",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd status",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Show (JSON)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd show ${input:bdIssueId} --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Start (set in_progress)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd update ${input:bdIssueId} --status in_progress --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Block (set blocked + notes)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd update ${input:bdIssueId} --status blocked --notes \"${input:bdNotes}\" --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Note (append notes)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd update ${input:bdIssueId} --notes \"${input:bdNotes}\" --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Close (with reason)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd close ${input:bdIssueId} --reason \"${input:bdCloseReason}\" --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Sync",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd sync",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Beads: Sync Status (JSON)",
+      "type": "shell",
+      "command": "${env:HOME}/.local/bin/bd sync --status --json",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

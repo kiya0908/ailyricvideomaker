@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1766821417288,
+      "tag": "0000_right_grim_reaper",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1782227995963,
+      "tag": "0001_lyric_videos",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1782229908126,
+      "tag": "0002_lyric_video_job_metadata",
+      "breakpoints": true
+    }
+  ]
+}

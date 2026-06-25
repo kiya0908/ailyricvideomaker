@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Monorepo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="216" height="216" rx="28" fill="none" stroke="url(#g)" stroke-width="14"/>
+  <g fill="url(#g)">
+    <circle cx="72" cy="88" r="16"/>
+    <circle cx="184" cy="88" r="16"/>
+    <circle cx="128" cy="168" r="18"/>
+  </g>
+  <g stroke="url(#g)" stroke-width="12" stroke-linecap="round">
+    <path d="M88 88h80"/>
+    <path d="M80 98l34 52"/>
+    <path d="M176 98l-34 52"/>
+  </g>
+</svg>
