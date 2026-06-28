@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gte } from "drizzle-orm";
 import { getDb } from "@repo/data-ops/database/setup";
 import { lyricVideos } from "@repo/data-ops/drizzle/lyric-video-schema";
 import type { LyricVideoJob } from "./jobs";
+import { getLyricVideoCostConfig } from "./config";
 import {
   defaultTemplateConfig,
   emptyLyricsJson,
@@ -31,9 +32,9 @@ type UpdateLyricVideoInput = {
 
 const AUDIO_OBJECT_NAME = "audio";
 const OUTPUT_OBJECT_NAME = "output.mp4";
-const MAX_AUDIO_FILE_BYTES = 25 * 1024 * 1024;
 const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "aac"]);
 const NOT_CONFIGURED_RENDER_PROVIDER = "not-configured";
+const WORKERS_AI_WHISPER_PROVIDER = "workers-ai-whisper";
 
 export async function listLyricVideos(userId: string) {
   const rows = await getDb()
@@ -56,7 +57,16 @@ export async function createLyricVideoFromUpload(input: {
   file: File;
   env: LyricVideoEnv;
 }) {
-  validateAudioFile(input.file);
+  const costConfig = getLyricVideoCostConfig(input.env);
+  validateAudioFile(input.file, costConfig.maxAudioBytes);
+  const transcriptionProvider = getConfiguredTranscriptionProviderName(input.env);
+
+  if (transcriptionProvider === WORKERS_AI_WHISPER_PROVIDER) {
+    await assertDailyTranscriptionLimit(
+      input.userId,
+      costConfig.dailyTranscriptionLimit,
+    );
+  }
 
   const id = crypto.randomUUID();
   const now = new Date();
@@ -88,7 +98,7 @@ export async function createLyricVideoFromUpload(input: {
       outputObjectKey: null,
       errorMessage: null,
       failureStage: null,
-      transcriptionProvider: getConfiguredTranscriptionProviderName(input.env),
+      transcriptionProvider,
       transcriptionJobId,
       renderProvider: null,
       renderJobId: null,
@@ -169,6 +179,16 @@ export async function renderOwnedLyricVideo(input: {
   }
   if (existing.status !== "ready-for-edit" && existing.status !== "ready") {
     throw new Error("Lyric video must be ready for edit before rendering");
+  }
+
+  const { maxDurationSeconds } = getLyricVideoCostConfig(input.env);
+  if (
+    existing.durationSeconds !== null &&
+    existing.durationSeconds > maxDurationSeconds
+  ) {
+    throw new Error(
+      `Audio duration exceeds the ${maxDurationSeconds}-second render limit`,
+    );
   }
 
   const renderJobId = crypto.randomUUID();
@@ -293,12 +313,37 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown lyric video error";
 }
 
-function validateAudioFile(file: File) {
+async function assertDailyTranscriptionLimit(userId: string, limit: number) {
+  const now = new Date();
+  const utcDayStart = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  ));
+  const rows = await getDb()
+    .select({ total: count() })
+    .from(lyricVideos)
+    .where(and(
+      eq(lyricVideos.userId, userId),
+      eq(lyricVideos.transcriptionProvider, WORKERS_AI_WHISPER_PROVIDER),
+      gte(lyricVideos.createdAt, utcDayStart),
+    ));
+  const total = Number(rows[0]?.total ?? 0);
+
+  if (total >= limit) {
+    throw new Error(`Daily transcription limit reached (${limit} per UTC day)`);
+  }
+}
+
+function validateAudioFile(file: File, maxAudioBytes: number) {
   if (file.size === 0) {
     throw new Error("Audio file cannot be empty");
   }
-  if (file.size > MAX_AUDIO_FILE_BYTES) {
-    throw new Error("Audio file must be 25MB or smaller");
+  if (file.size > maxAudioBytes) {
+    const limit = maxAudioBytes === 25 * 1024 * 1024
+      ? "25MB"
+      : `${maxAudioBytes} bytes`;
+    throw new Error(`Audio file must be ${limit} or smaller`);
   }
 
   const name = file.name.toLowerCase();

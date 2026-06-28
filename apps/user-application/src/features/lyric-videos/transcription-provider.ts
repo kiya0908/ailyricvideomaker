@@ -7,6 +7,7 @@ export type TranscriptionProviderInput = {
   audioFileUrl: string;
   env: Env;
   lyricVideoId: string;
+  provider?: string | null;
   userId: string;
 };
 
@@ -39,10 +40,16 @@ const WORKERS_AI_WHISPER_MODEL = "@cf/openai/whisper";
 const WORD_LINE_GAP_SECONDS = 1.5;
 const FALLBACK_LINE_SECONDS = 3;
 
+export class TranscriptionInfrastructureError extends Error {
+  override name = "TranscriptionInfrastructureError";
+}
+
 export async function transcribeLyricVideoAudio(
   input: TranscriptionProviderInput,
 ): Promise<TranscriptionProviderResult> {
-  const provider = getConfiguredTranscriptionProviderName(input.env);
+  const provider = input.provider
+    ? parseTranscriptionProviderName(input.provider)
+    : getConfiguredTranscriptionProviderName(input.env);
 
   switch (provider) {
     case "development-stub":
@@ -76,8 +83,15 @@ export function getConfiguredTranscriptionProviderName(env: Env): TranscriptionP
   if (!provider || provider === DEVELOPMENT_TRANSCRIPTION_PROVIDER) {
     return DEVELOPMENT_TRANSCRIPTION_PROVIDER;
   }
-  if (provider === WORKERS_AI_WHISPER_PROVIDER) {
-    return WORKERS_AI_WHISPER_PROVIDER;
+  return parseTranscriptionProviderName(provider);
+}
+
+function parseTranscriptionProviderName(provider: string): TranscriptionProviderName {
+  if (
+    provider === DEVELOPMENT_TRANSCRIPTION_PROVIDER ||
+    provider === WORKERS_AI_WHISPER_PROVIDER
+  ) {
+    return provider;
   }
   throw new Error(`Unsupported lyric video transcription provider: ${provider}`);
 }
@@ -117,20 +131,72 @@ async function transcribeWithWorkersAiWhisper(
     throw new Error("AI binding is not configured");
   }
 
-  const audioObject = await env.LYRIC_VIDEO_BUCKET.get(input.audioObjectKey);
+  let audioObject: R2ObjectBody | null;
+  try {
+    audioObject = await env.LYRIC_VIDEO_BUCKET.get(input.audioObjectKey);
+  } catch {
+    throw new TranscriptionInfrastructureError(
+      "R2 audio read failed before transcription",
+    );
+  }
   if (!audioObject) {
     throw new Error("Audio object was not found in R2 for transcription");
   }
 
-  const audioBuffer = await audioObject.arrayBuffer();
-  const response = await env.AI.run(WORKERS_AI_WHISPER_MODEL, {
-    audio: [...new Uint8Array(audioBuffer)],
-  });
+  let audioBuffer: ArrayBuffer;
+  try {
+    audioBuffer = await audioObject.arrayBuffer();
+  } catch {
+    throw new TranscriptionInfrastructureError(
+      "R2 audio body read failed before transcription",
+    );
+  }
 
+  let response: WhisperResult;
+  try {
+    response = await env.AI.run(WORKERS_AI_WHISPER_MODEL, {
+      audio: [...new Uint8Array(audioBuffer)],
+    });
+  } catch {
+    throw new Error("Workers AI transcription failed");
+  }
+
+  const durationSeconds = inferWhisperDurationSeconds(response);
   return {
     provider: WORKERS_AI_WHISPER_PROVIDER,
     lyricsJson: convertWhisperResultToLyricsJson(response),
+    ...(durationSeconds === undefined ? {} : { durationSeconds }),
   };
+}
+
+function inferWhisperDurationSeconds(result: WhisperResult) {
+  if (Array.isArray(result.words)) {
+    const wordEnd = result.words.reduce((maximum, word) => {
+      const normalized = normalizeWhisperWord(word);
+      return normalized ? Math.max(maximum, normalized.end) : maximum;
+    }, 0);
+    if (wordEnd > 0) {
+      return Math.ceil(wordEnd);
+    }
+  }
+
+  if (typeof result.vtt !== "string") {
+    return undefined;
+  }
+
+  const vttEnd = result.vtt
+    .replace(/\r/g, "")
+    .split("\n")
+    .reduce((maximum, line) => {
+      if (!line.includes("-->")) {
+        return maximum;
+      }
+      const rawEnd = line.split("-->")[1]?.trim().split(/\s+/)[0] ?? "";
+      const end = parseVttTimestamp(rawEnd);
+      return end === null ? maximum : Math.max(maximum, end);
+    }, 0);
+
+  return vttEnd > 0 ? Math.ceil(vttEnd) : undefined;
 }
 
 function convertWordsToLyricsJson(words: unknown): LyricsJson {

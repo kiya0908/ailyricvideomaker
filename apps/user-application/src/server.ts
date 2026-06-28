@@ -5,7 +5,7 @@ import { initDatabase } from "@repo/data-ops/database/setup";
 import handler from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
 import {
-  processLyricVideoJob,
+  processLyricVideoBatch,
   type LyricVideoJob,
 } from "@/features/lyric-videos/jobs";
 
@@ -36,9 +36,6 @@ export default {
   },
   async queue(batch: MessageBatch<LyricVideoJob>, workerEnv: Env) {
     initDatabase(workerEnv.DB);
-    for (const message of batch.messages) {
-      await processLyricVideoJob(message.body, workerEnv);
-      message.ack();
-    }
+    await processLyricVideoBatch(batch, workerEnv);
   },
 };

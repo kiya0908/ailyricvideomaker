@@ -1,16 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tanstack-start-app",
-  "compatibility_date": "2025-12-17",
+  "name": "ailyricvideomaker",
+  "compatibility_date": "2026-06-25",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./src/server.ts",
   "vars": {
-    "MY_VAR": "Hello from Cloudflare",
-    "BETTER_AUTH_SECRET": "",
-    "GOOGLE_CLIENT_ID": "",
-    "GOOGLE_CLIENT_SECRET": "",
-    "POLAR_SECRET":"",
-    "LYRIC_VIDEO_TRANSCRIPTION_PROVIDER": "development-stub"
+    "LYRIC_VIDEO_TRANSCRIPTION_PROVIDER": "development-stub",
+    "LYRIC_VIDEO_MAX_AUDIO_BYTES": "26214400",
+    "LYRIC_VIDEO_DAILY_TRANSCRIPTION_LIMIT": "5",
+    "LYRIC_VIDEO_MAX_DURATION_SECONDS": "300"
   },
   "ai": {
     "binding": "AI"
@@ -18,16 +16,16 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "saas-kit-db",
-      "database_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-      "remote": false,
+      "database_name": "ailyricvideomaker",
+      "database_id": "9a3741cb-70aa-490f-898c-c2bc84466a79",
+      "remote": false, //本地开发时，不连接 Cloudflare 上真实的 D1，而是使用本地模拟/本地存储的 D1//
       "migrations_dir": "../../packages/data-ops/src/drizzle",
     },
   ],
   "r2_buckets": [
     {
-      "binding": "LYRIC_VIDEO_BUCKET",
-      "bucket_name": "saas-kit-lyric-videos",
+      "binding": "LYRIC_VIDEO_BUCKET",  //Worker 运行时暴露给代码使用的变量名，整个程序在使用R2存储桶是用的变量名，不做修改//
+      "bucket_name": "ailyricvideomaker",
     },
   ],
   "queues": {
@@ -42,6 +40,7 @@
         "queue": "lyric-video-jobs",
         "max_batch_size": 1,
         "max_batch_timeout": 5,
+        "max_retries": 2,
       },
     ],
   },

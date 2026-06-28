@@ -59,6 +59,7 @@ describe("transcription provider", () => {
     expect(result).toEqual(
       expect.objectContaining({
         provider: "workers-ai-whisper",
+        durationSeconds: 1,
         lyricsJson: expect.objectContaining({
           lines: [
             expect.objectContaining({
@@ -84,6 +85,31 @@ describe("transcription provider", () => {
       lyricVideoId: "video-1",
       userId: "user-1",
     })).rejects.toThrow("Audio object was not found in R2");
+  });
+
+  it("infers duration from VTT when words are unavailable", async () => {
+    const result = await transcribeLyricVideoAudio({
+      audioFileUrl: "/api/lyric-videos/video-1/audio",
+      audioObjectKey: "lyric-videos/user-1/video-1/audio",
+      env: createEnv({
+        LYRIC_VIDEO_TRANSCRIPTION_PROVIDER: "workers-ai-whisper",
+        LYRIC_VIDEO_BUCKET: {
+          get: vi.fn().mockResolvedValue({
+            arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1]).buffer),
+          }),
+        },
+        AI: {
+          run: vi.fn().mockResolvedValue({
+            vtt: "WEBVTT\n\n00:00:00.000 --> 00:00:05.200\nHello",
+            text: "Hello",
+          }),
+        },
+      }),
+      lyricVideoId: "video-1",
+      userId: "user-1",
+    });
+
+    expect(result.durationSeconds).toBe(6);
   });
 
   it("converts Whisper words to LyricsJson", () => {
