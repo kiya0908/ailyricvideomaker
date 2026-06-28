@@ -81,6 +81,22 @@ describe("createLyricVideoFromUpload", () => {
     ).rejects.toThrow("Audio file must be 25MB or smaller");
   });
 
+  it("rejects files larger than the configured byte limit", async () => {
+    const bucket = createBucket();
+
+    await expect(
+      createLyricVideoFromUpload({
+        userId: "user-1",
+        file: new File(["12345"], "song.mp3", { type: "audio/mpeg" }),
+        env: createEnv(bucket, createQueue(), {
+          LYRIC_VIDEO_MAX_AUDIO_BYTES: "4",
+        }),
+      }),
+    ).rejects.toThrow("Audio file must be 4 bytes or smaller");
+
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
   it("rejects empty files", async () => {
     const file = new File([], "empty.mp3", { type: "audio/mpeg" });
 
@@ -167,6 +183,39 @@ describe("createLyricVideoFromUpload", () => {
       }),
     );
     expect(sentJobs).toHaveLength(1);
+  });
+
+  it("rejects real transcription uploads at the daily limit before side effects", async () => {
+    const bucket = createBucket();
+    const queue = createQueue();
+    const aiRun = vi.fn();
+    const insertValues = vi.fn();
+    mockGetDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: vi.fn().mockResolvedValue([{ total: 1 }]),
+        }),
+      }),
+      insert: () => ({ values: insertValues }),
+    });
+
+    await expect(
+      createLyricVideoFromUpload({
+        userId: "user-1",
+        file: new File(["audio"], "song.mp3", { type: "audio/mpeg" }),
+        env: createEnv(bucket, queue, {
+          AI: { run: aiRun },
+          LYRIC_VIDEO_TRANSCRIPTION_PROVIDER: "workers-ai-whisper",
+          LYRIC_VIDEO_DAILY_TRANSCRIPTION_LIMIT: "1",
+        }),
+      }),
+    ).rejects.toThrow("Daily transcription limit reached (1 per UTC day)");
+
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(bucket.delete).not.toHaveBeenCalled();
+    expect(insertValues).not.toHaveBeenCalled();
+    expect(queue.send).not.toHaveBeenCalled();
+    expect(aiRun).not.toHaveBeenCalled();
   });
 
 
@@ -302,6 +351,27 @@ describe("renderOwnedLyricVideo", () => {
     expect(sentJobs).toEqual([]);
     expect(updates).toEqual([]);
   });
+
+  it("keeps long transcriptions editable but rejects render before side effects", async () => {
+    const sentJobs: unknown[] = [];
+    const updates: unknown[] = [];
+    mockGetDb.mockReturnValue(createDbForExistingVideo({
+      ...baseRow,
+      durationSeconds: 301,
+      status: "ready-for-edit",
+    }, updates));
+
+    await expect(renderOwnedLyricVideo({
+      userId: "user-1",
+      id: "video-1",
+      env: createEnv(createBucket(), createQueue(sentJobs), {
+        LYRIC_VIDEO_MAX_DURATION_SECONDS: "300",
+      }),
+    })).rejects.toThrow("Audio duration exceeds the 300-second render limit");
+
+    expect(updates).toEqual([]);
+    expect(sentJobs).toEqual([]);
+  });
 });
 
 describe("getLyricVideo", () => {
@@ -384,7 +454,11 @@ function createQueue(sentJobs: unknown[] = [], error?: Error) {
   };
 }
 
-function createDbForCreatedVideo(insertedValues: unknown[], updates: unknown[] = []) {
+function createDbForCreatedVideo(
+  insertedValues: unknown[],
+  updates: unknown[] = [],
+  dailyTranscriptionCount = 0,
+) {
   let row = { ...baseRow };
   return {
     insert: () => ({
@@ -409,11 +483,13 @@ function createDbForCreatedVideo(insertedValues: unknown[], updates: unknown[] =
         };
       },
     }),
-    select: () => ({
+    select: (selection?: unknown) => ({
       from: () => ({
-        where: () => ({
-          limit: vi.fn().mockResolvedValue([row]),
-        }),
+        where: () => selection
+          ? Promise.resolve([{ total: dailyTranscriptionCount }])
+          : {
+              limit: vi.fn().mockResolvedValue([row]),
+            },
       }),
     }),
   };
