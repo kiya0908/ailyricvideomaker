@@ -44,4 +44,48 @@
       },
     ],
   },
+  "env": {
+    "staging": {
+      "name": "ailyricvideomaker-staging",
+      "vars": {
+        "LYRIC_VIDEO_TRANSCRIPTION_PROVIDER": "development-stub",
+        "LYRIC_VIDEO_MAX_AUDIO_BYTES": "26214400",
+        "LYRIC_VIDEO_DAILY_TRANSCRIPTION_LIMIT": "5",
+        "LYRIC_VIDEO_MAX_DURATION_SECONDS": "300"
+      },
+      "ai": {
+        "binding": "AI"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ailyricvideomaker-staging",
+          "database_id": "ceea7c1f-3ae6-402b-8c80-5f27ec3fb5fe",
+          "migrations_dir": "../../packages/data-ops/src/drizzle"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "LYRIC_VIDEO_BUCKET",
+          "bucket_name": "ailyricvideomaker-staging"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "LYRIC_VIDEO_JOBS",
+            "queue": "lyric-video-jobs-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "lyric-video-jobs-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 2
+          }
+        ]
+      }
+    }
+  }
 }
