@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lyricVideos } from "@repo/data-ops/drizzle/lyric-video-schema";
-import { processLyricVideoBatch, processLyricVideoJob } from "./jobs";
+import {
+  processLyricVideoBatch,
+  processLyricVideoJob,
+  processRenderJob,
+} from "./jobs";
+import {
+  RenderInfrastructureProviderError,
+  RenderTerminalProviderError,
+  type RenderLyricVideoProvider,
+} from "./render-provider";
 
 const mockGetDb = vi.fn();
 
@@ -392,10 +401,8 @@ describe("processLyricVideoJob", () => {
 
   it("marks render jobs failed when no render provider is configured", async () => {
     const updates: unknown[] = [];
-    mockGetDb.mockReturnValue(createDbForExistingVideo({
-      ...baseRow,
-      status: "rendering",
-    }, updates));
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket();
 
     await processLyricVideoJob({
       type: "render",
@@ -403,7 +410,7 @@ describe("processLyricVideoJob", () => {
       lyricVideoId: "video-1",
       userId: "user-1",
       createdAt: Date.now(),
-    }, createEnv());
+    }, createEnv({ LYRIC_VIDEO_BUCKET: bucket }));
 
     expect(updates).toContainEqual(
       expect.objectContaining({
@@ -420,6 +427,359 @@ describe("processLyricVideoJob", () => {
         outputObjectKey: expect.any(String),
       }),
     );
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it("passes env selection through to the development render stub", async () => {
+    const updates: unknown[] = [];
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      durationSeconds: null,
+    }), updates));
+    const bucket = createRenderBucket();
+
+    await processLyricVideoJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+      LYRIC_VIDEO_RENDER_PROVIDER: "development-stub-render",
+    }));
+
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Development render stub does not produce a video artifact",
+      failureStage: "render",
+      renderProvider: "development-stub-render",
+    }));
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: "ready" }));
+  });
+
+  it("fails before provider invocation when audioObjectKey is missing", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      audioObjectKey: null,
+    }), updates));
+    const bucket = createRenderBucket();
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(provider.render).not.toHaveBeenCalled();
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Audio object key is missing",
+      failureStage: "render",
+    }));
+  });
+
+  it("records a storage failure before provider invocation when audio is missing", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket({ audioObject: null });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(provider.render).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Audio object is missing from R2",
+      failureStage: "storage",
+    }));
+  });
+
+  it("fails before provider invocation when lyrics are empty", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      lyricsJson: { lines: [] },
+    }), updates));
+    const bucket = createRenderBucket();
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(provider.render).not.toHaveBeenCalled();
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Lyrics are required before rendering",
+      failureStage: "render",
+    }));
+  });
+
+  it("rejects unknown duration for a real provider before invocation", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider({ name: "real-render-provider" });
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      durationSeconds: null,
+    }), updates));
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: createRenderBucket(),
+    }), provider);
+
+    expect(provider.render).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Audio duration is required before rendering",
+      failureStage: "render",
+    }));
+  });
+
+  it("rejects duration and lyric limits before provider invocation", async () => {
+    const durationUpdates: unknown[] = [];
+    const durationProvider = createFakeProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      durationSeconds: 301,
+    }), durationUpdates));
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: createRenderBucket(),
+      LYRIC_VIDEO_MAX_DURATION_SECONDS: "300",
+    }), durationProvider);
+
+    expect(durationProvider.render).not.toHaveBeenCalled();
+    expect(durationUpdates).toContainEqual(expect.objectContaining({
+      errorMessage: "Audio duration exceeds the 300-second render limit",
+    }));
+
+    const lyricsUpdates: unknown[] = [];
+    const lyricsProvider = createFakeProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow({
+      lyricsJson: {
+        lines: [
+          { id: "line-1", start: 0, end: 1, text: "One" },
+          { id: "line-2", start: 1, end: 2, text: "Two" },
+        ],
+      },
+    }), lyricsUpdates));
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: createRenderBucket(),
+      LYRIC_VIDEO_MAX_LYRICS_LINES: "1",
+    }), lyricsProvider);
+
+    expect(lyricsProvider.render).not.toHaveBeenCalled();
+    expect(lyricsUpdates).toContainEqual(expect.objectContaining({
+      errorMessage: "Lyrics exceed the 1-line render limit",
+    }));
+  });
+
+  it("records terminal provider failures with the selected provider", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider({
+      error: new RenderTerminalProviderError("Template is not supported"),
+    });
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: createRenderBucket(),
+    }), provider);
+
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Template is not supported",
+      failureStage: "render",
+      renderProvider: "fake-render-provider",
+    }));
+  });
+
+  it("throws infrastructure provider failures for Queue retry", async () => {
+    const updates: unknown[] = [];
+    const provider = createFakeProvider({
+      error: new RenderInfrastructureProviderError("Provider unavailable"),
+    });
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+
+    await expect(processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: createRenderBucket(),
+    }), provider)).rejects.toThrow("Provider unavailable");
+
+    expect(updates).toEqual([]);
+  });
+
+  it("streams a video result to a job-scoped key before publishing ready", async () => {
+    const updates: unknown[] = [];
+    const videoBody = new ReadableStream<Uint8Array>();
+    const provider = createVideoProvider(videoBody);
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const outputObject = createOutputObject();
+    const bucket = createRenderBucket({
+      outputHeads: [null, outputObject],
+    });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    const outputKey = "lyric-videos/user-1/video-1/renders/render-job-1.mp4";
+    expect(bucket.put).toHaveBeenCalledWith(
+      outputKey,
+      videoBody,
+      expect.objectContaining({
+        httpMetadata: { contentType: "video/mp4" },
+        customMetadata: expect.objectContaining({
+          renderJobId: "render-job-1",
+          renderProvider: "fake-video-provider",
+        }),
+      }),
+    );
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "ready",
+      outputObjectKey: outputKey,
+      outputVideoUrl: "/api/lyric-videos/video-1/output",
+      renderProvider: "fake-video-provider",
+      errorMessage: null,
+      failureStage: null,
+    }));
+  });
+
+  it("reuses a verified job-scoped output without invoking the provider again", async () => {
+    const updates: unknown[] = [];
+    const provider = createVideoProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket({
+      outputHeads: [createOutputObject()],
+    });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(provider.render).not.toHaveBeenCalled();
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "ready",
+      outputObjectKey: "lyric-videos/user-1/video-1/renders/render-job-1.mp4",
+    }));
+  });
+
+  it("does not attribute an existing output without provider metadata to the stub", async () => {
+    const updates: unknown[] = [];
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const output = createOutputObject({ renderJobId: "render-job-1" });
+    const bucket = createRenderBucket({ outputHeads: [output] });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+      LYRIC_VIDEO_RENDER_PROVIDER: "development-stub-render",
+    }));
+
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      renderProvider: "development-stub-render",
+    }));
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: "ready" }));
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it("does not persist provider output after the render job becomes stale", async () => {
+    const updates: unknown[] = [];
+    const provider = createVideoProvider();
+    mockGetDb.mockReturnValue(createDbForVideoSequence([
+      createRenderingRow(),
+      createRenderingRow({ renderJobId: "newer-render-job" }),
+    ], updates));
+    const bucket = createRenderBucket({ outputHeads: [null] });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(provider.render).toHaveBeenCalledOnce();
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+
+  it("throws when R2 output persistence fails and does not publish ready", async () => {
+    const updates: unknown[] = [];
+    const provider = createVideoProvider();
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket({
+      outputHeads: [null],
+      putError: new Error("R2 unavailable"),
+    });
+
+    await expect(processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider)).rejects.toThrow("R2 unavailable");
+
+    expect(updates).toEqual([]);
+  });
+
+  it("keeps the R2 output reusable when the ready update fails", async () => {
+    const provider = createVideoProvider();
+    mockGetDb.mockReturnValue(createDbWithUpdateFailure(
+      createRenderingRow(),
+      new Error("D1 unavailable"),
+    ));
+    const bucket = createRenderBucket({
+      outputHeads: [null, createOutputObject()],
+    });
+
+    await expect(processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider)).rejects.toThrow("D1 unavailable");
+
+    expect(bucket.put).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a non-MP4 provider result without writing output", async () => {
+    const updates: unknown[] = [];
+    const provider = {
+      name: "invalid-video-provider",
+      render: vi.fn().mockResolvedValue({
+        kind: "video",
+        provider: "invalid-video-provider",
+        body: new ReadableStream<Uint8Array>(),
+        contentType: "text/plain",
+      }),
+    } as unknown as RenderLyricVideoProvider;
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket({ outputHeads: [null] });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorMessage: "Render provider must return a video/mp4 stream",
+      failureStage: "render",
+    }));
+  });
+
+  it("rejects a video result that claims to come from the development stub", async () => {
+    const updates: unknown[] = [];
+    const provider = {
+      name: "development-stub-render",
+      render: vi.fn().mockResolvedValue({
+        kind: "video",
+        provider: "development-stub-render",
+        body: new ReadableStream<Uint8Array>(),
+        contentType: "video/mp4",
+      }),
+    } as unknown as RenderLyricVideoProvider;
+    mockGetDb.mockReturnValue(createDbForExistingVideo(createRenderingRow(), updates));
+    const bucket = createRenderBucket({ outputHeads: [null] });
+
+    await processRenderJob(createRenderJob(), createEnv({
+      LYRIC_VIDEO_BUCKET: bucket,
+    }), provider);
+
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: "failed",
+      renderProvider: "development-stub-render",
+    }));
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: "ready" }));
   });
 
   it("skips render jobs when the job id no longer matches", async () => {
@@ -488,12 +848,125 @@ function createEnv(overrides: Record<string, unknown> = {}) {
   } as unknown as Env;
 }
 
+function createRenderJob() {
+  return {
+    type: "render" as const,
+    jobId: "render-job-1",
+    lyricVideoId: "video-1",
+    userId: "user-1",
+    createdAt: Date.now(),
+  };
+}
+
+function createRenderingRow(overrides: Partial<LyricVideoRow> = {}): LyricVideoRow {
+  return {
+    ...baseRow,
+    status: "rendering",
+    durationSeconds: 60,
+    lyricsJson: {
+      lines: [{ id: "line-1", start: 0, end: 1, text: "Hello" }],
+    },
+    ...overrides,
+  };
+}
+
+function createRenderBucket(options: {
+  audioObject?: R2ObjectBody | null;
+  outputHeads?: Array<R2Object | null>;
+  putError?: Error;
+} = {}) {
+  const audioObject = options.audioObject === undefined
+    ? {
+        body: new ReadableStream<Uint8Array>(),
+        httpMetadata: { contentType: "audio/mpeg" },
+      } as R2ObjectBody
+    : options.audioObject;
+
+  const head = vi.fn();
+  for (const outputHead of options.outputHeads ?? [null]) {
+    head.mockResolvedValueOnce(outputHead);
+  }
+
+  return {
+    get: vi.fn().mockResolvedValue(audioObject),
+    put: options.putError
+      ? vi.fn().mockRejectedValue(options.putError)
+      : vi.fn().mockResolvedValue(undefined),
+    head,
+    delete: vi.fn(),
+  };
+}
+
+function createOutputObject(customMetadata: Record<string, string> = {
+  renderJobId: "render-job-1",
+  renderProvider: "fake-video-provider",
+}): R2Object {
+  return {
+    size: 128,
+    httpMetadata: { contentType: "video/mp4" },
+    customMetadata,
+  } as unknown as R2Object;
+}
+
+function createFakeProvider(options: {
+  name?: string;
+  error?: Error;
+} = {}): RenderLyricVideoProvider & { render: ReturnType<typeof vi.fn> } {
+  const render = vi.fn(async () => {
+    if (options.error) {
+      throw options.error;
+    }
+    return {
+      kind: "dry-run" as const,
+      provider: "development-stub-render" as const,
+    };
+  });
+
+  return {
+    name: options.name ?? "fake-render-provider",
+    render,
+  };
+}
+
+function createVideoProvider(
+  body = new ReadableStream<Uint8Array>(),
+): RenderLyricVideoProvider & { render: ReturnType<typeof vi.fn> } {
+  const render = vi.fn(async () => ({
+    kind: "video" as const,
+    provider: "fake-video-provider",
+    body,
+    contentType: "video/mp4" as const,
+  }));
+
+  return {
+    name: "fake-video-provider",
+    render,
+  };
+}
+
 function createDbForExistingVideo(row: typeof baseRow, updates: unknown[]) {
   return createDbForVideoSequence([row], updates);
 }
 
 function createDbForMissingVideo(updates: unknown[]) {
   return createDbForVideoSequence([], updates);
+}
+
+function createDbWithUpdateFailure(row: LyricVideoRow, error: Error) {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: vi.fn().mockResolvedValue([row]),
+        }),
+      }),
+    }),
+    update: () => ({
+      set: () => ({
+        where: vi.fn().mockRejectedValue(error),
+      }),
+    }),
+  };
 }
 
 function createDbForVideoSequence(rows: Array<typeof baseRow>, updates: unknown[]) {

@@ -31,7 +31,6 @@ type UpdateLyricVideoInput = {
 };
 
 const AUDIO_OBJECT_NAME = "audio";
-const OUTPUT_OBJECT_NAME = "output.mp4";
 const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "aac"]);
 const NOT_CONFIGURED_RENDER_PROVIDER = "not-configured";
 const WORKERS_AI_WHISPER_PROVIDER = "workers-ai-whisper";
@@ -236,12 +235,17 @@ export async function getLyricVideoAsset(input: {
   if (!existing) {
     return null;
   }
-  const objectKey =
-    input.kind === "audio"
-      ? existing.audioObjectKey ?? createObjectKey(input.userId, input.id, AUDIO_OBJECT_NAME)
-      : existing.outputObjectKey ?? createObjectKey(input.userId, input.id, OUTPUT_OBJECT_NAME);
-  const object = await getBucket(input.env).get(objectKey);
-  return object;
+
+  if (input.kind === "output") {
+    if (existing.status !== "ready" || !existing.outputObjectKey) {
+      return null;
+    }
+    return getBucket(input.env).get(existing.outputObjectKey);
+  }
+
+  const objectKey = existing.audioObjectKey ??
+    createObjectKey(input.userId, input.id, AUDIO_OBJECT_NAME);
+  return getBucket(input.env).get(objectKey);
 }
 
 function mapLyricVideoRow(row: LyricVideoRow): LyricVideo {
