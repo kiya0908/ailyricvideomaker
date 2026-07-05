@@ -420,6 +420,64 @@ describe("getLyricVideoAsset", () => {
 
     expect(bucket.get).toHaveBeenCalledWith("custom/audio/key");
   });
+
+  it("does not expose output for a failed video even when an old key exists", async () => {
+    const bucket = createBucket();
+    mockGetDb.mockReturnValue(createDbForExistingVideo({
+      ...baseRow,
+      status: "failed",
+      outputObjectKey: "lyric-videos/user-1/video-1/old-output.mp4",
+    }, []));
+
+    const result = await getLyricVideoAsset({
+      userId: "user-1",
+      id: "video-1",
+      kind: "output",
+      env: createEnv(bucket),
+    });
+
+    expect(result).toBeNull();
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
+
+  it("does not invent an output key when a ready video has no stored key", async () => {
+    const bucket = createBucket();
+    mockGetDb.mockReturnValue(createDbForExistingVideo({
+      ...baseRow,
+      status: "ready",
+      outputObjectKey: null,
+    }, []));
+
+    const result = await getLyricVideoAsset({
+      userId: "user-1",
+      id: "video-1",
+      kind: "output",
+      env: createEnv(bucket),
+    });
+
+    expect(result).toBeNull();
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
+
+  it("loads output only from the explicit key of a ready video", async () => {
+    const bucket = createBucket();
+    mockGetDb.mockReturnValue(createDbForExistingVideo({
+      ...baseRow,
+      status: "ready",
+      outputObjectKey: "lyric-videos/user-1/video-1/renders/render-job-1.mp4",
+    }, []));
+
+    await getLyricVideoAsset({
+      userId: "user-1",
+      id: "video-1",
+      kind: "output",
+      env: createEnv(bucket),
+    });
+
+    expect(bucket.get).toHaveBeenCalledWith(
+      "lyric-videos/user-1/video-1/renders/render-job-1.mp4",
+    );
+  });
 });
 
 function createEnv(
